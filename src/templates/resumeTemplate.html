@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Optimized Resume</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────── */
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'Calibri', 'Arial', sans-serif;
+      font-size: 11pt;
+      line-height: 1.5;
+      color: #2d3748;
+      background: #ffffff;
+      padding: 0.4in 0.6in;
+    }
+
+    /* ── Name / Header ─────────────────────────────────── */
+    h1.name {
+      font-size: 22pt;
+      font-weight: 700;
+      color: #1a365d;
+      text-align: center;
+      margin-bottom: 2px;
+      letter-spacing: 0.5px;
+    }
+
+    .contact-info {
+      text-align: center;
+      font-size: 9.5pt;
+      color: #4a5568;
+      margin-bottom: 2px;
+    }
+
+    /* ── Section ───────────────────────────────────────── */
+    .section {
+      margin-top: 14px;
+    }
+
+    .section-title {
+      font-size: 12pt;
+      font-weight: 700;
+      color: #1a365d;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 2px solid #2b6cb0;
+      padding-bottom: 3px;
+      margin-bottom: 8px;
+    }
+
+    .section-content p {
+      margin-bottom: 4px;
+      font-size: 10.5pt;
+    }
+
+    .bullet-item {
+      margin-left: 16px;
+      margin-bottom: 3px;
+      font-size: 10.5pt;
+      position: relative;
+      padding-left: 4px;
+    }
+
+    /* ── Score Badge (top-right) ────────────────────────── */
+    .score-badge {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: #2b6cb0;
+      color: #fff;
+      font-size: 8pt;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    /* ── Print Optimizations ────────────────────────────── */
+    @media print {
+      body {
+        padding: 0;
+      }
+      .score-badge {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="score-badge">ATS Score: {{SCORE}}</div>
+  {{RESUME_CONTENT}}
+</body>
+</html>
