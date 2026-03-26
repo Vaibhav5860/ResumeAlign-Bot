@@ -13,6 +13,7 @@ const path   = require('path');
 const axios  = require('axios');
 const logger = require('../utils/logger');
 const { downloadFile, getFileExtension, cleanupFiles } = require('../utils/fileHandler');
+const { parseResume }   = require('../services/parserService');
 const { processResume } = require('../controllers/resumeController');
 
 // ── In-Memory Session Store ─────────────────────────────────────────
@@ -151,12 +152,6 @@ function registerHandlers(bot) {
     const chatId  = ctx.chat.id;
     const session = getSession(chatId);
 
-    if (session.state !== STATE.AWAITING_RESUME) {
-      return ctx.replyWithMarkdown(
-        'Please use /analyze first to start a new analysis, then upload your resume.'
-      );
-    }
-
     const document = ctx.message.document;
     const fileName = document.file_name || '';
     const ext      = getFileExtension(fileName);
@@ -174,28 +169,74 @@ function registerHandlers(bot) {
       return ctx.reply('❌ File is too large. Please upload a file under 20MB.');
     }
 
-    try {
-      await ctx.reply('📥 Downloading your resume...');
+    // ── State: Awaiting Resume (file = resume) ──────────────────────
+    if (session.state === STATE.AWAITING_RESUME) {
+      try {
+        await ctx.reply('📥 Downloading your resume...');
 
-      // Get file link from Telegram
-      const fileLink = await ctx.telegram.getFileLink(document.file_id);
-      const filePath = await downloadFile(fileLink.href, ext);
+        const fileLink = await ctx.telegram.getFileLink(document.file_id);
+        const filePath = await downloadFile(fileLink.href, ext);
 
-      // Update session
-      session.resumePath = filePath;
-      session.resumeExt  = ext;
-      session.state      = STATE.AWAITING_JD;
+        session.resumePath = filePath;
+        session.resumeExt  = ext;
+        session.state      = STATE.AWAITING_JD;
 
-      ctx.replyWithMarkdown(
-        `✅ Resume received! (\`${fileName}\`)\n\n` +
-        `📝 *Step 2/2: Paste the Job Description*\n\n` +
-        `Please paste the full job description text below.\n\n` +
-        `_Use /cancel to abort._`
-      );
-    } catch (err) {
-      logger.error(`Failed to download document: ${err.message}`);
-      ctx.reply('❌ Failed to download your file. Please try again.');
+        ctx.replyWithMarkdown(
+          `✅ Resume received! (\`${fileName}\`)\n\n` +
+          `📝 *Step 2/2: Provide the Job Description*\n\n` +
+          `You can either:\n` +
+          `• *Paste* the JD as text below\n` +
+          `• *Upload* the JD as a PDF or DOCX file\n\n` +
+          `_Use /cancel to abort._`
+        );
+      } catch (err) {
+        logger.error(`Failed to download resume: ${err.message}`);
+        ctx.reply('❌ Failed to download your file. Please try again.');
+      }
+      return;
     }
+
+    // ── State: Awaiting JD (file = job description) ─────────────────
+    if (session.state === STATE.AWAITING_JD) {
+      try {
+        await ctx.reply('📥 Downloading job description file...');
+
+        const fileLink = await ctx.telegram.getFileLink(document.file_id);
+        const filePath = await downloadFile(fileLink.href, ext);
+
+        // Parse the JD file to extract text
+        const jdText = await parseResume(filePath, ext);
+        cleanupFiles([filePath]); // cleanup JD temp file immediately
+
+        if (!jdText || jdText.length < 30) {
+          return ctx.reply('⚠️ The job description file seems too short or could not be read. Please try pasting the JD as text instead.');
+        }
+
+        session.jdText = jdText;
+        session.state  = STATE.PROCESSING;
+
+        await ctx.replyWithMarkdown(
+          `✅ Job description received from file! (\`${fileName}\`)\n\n` +
+          `⏳ *Analyzing your resume...* This may take 30–60 seconds.\n\n` +
+          `🔍 Parsing resume\n` +
+          `📊 Computing keyword match\n` +
+          `🤖 Running AI analysis\n` +
+          `📝 Generating optimized resume`
+        );
+
+        // Trigger processing
+        await triggerProcessing(ctx, chatId, session);
+      } catch (err) {
+        logger.error(`Failed to process JD file: ${err.message}`);
+        ctx.reply('❌ Could not read the JD file. Please try pasting the JD as text instead.');
+      }
+      return;
+    }
+
+    // ── State: Idle or other ─────────────────────────────────────────
+    return ctx.replyWithMarkdown(
+      'Please use /analyze first to start a new analysis.'
+    );
   });
 
   // ── Text Message Handler (JD Input) ───────────────────────────────
@@ -225,56 +266,8 @@ function registerHandlers(bot) {
         `📝 Generating optimized resume`
       );
 
-      // ── Trigger Processing Pipeline ───────────────────────────────
-      const filesToCleanup = [];
-
-      try {
-        const result = await processResume(
-          session.resumePath,
-          session.resumeExt,
-          session.jdText
-        );
-
-        filesToCleanup.push(result.pdfPath, result.docxPath);
-
-        // Send the analysis report
-        await ctx.replyWithMarkdown(result.formattedMessage);
-
-        // Send the PDF file
-        if (result.pdfPath && fs.existsSync(result.pdfPath)) {
-          await ctx.replyWithDocument(
-            { source: result.pdfPath, filename: 'improved_resume.pdf' },
-            { caption: '📄 Your optimized resume (PDF)' }
-          );
-        }
-
-        // Send the DOCX file
-        if (result.docxPath && fs.existsSync(result.docxPath)) {
-          await ctx.replyWithDocument(
-            { source: result.docxPath, filename: 'improved_resume.docx' },
-            { caption: '📝 Your optimized resume (DOCX)' }
-          );
-        }
-
-        await ctx.replyWithMarkdown(
-          `✅ *Analysis complete!*\n\n` +
-          `Use /analyze to analyze with a different job description.\n` +
-          `Use /start to restart the bot.`
-        );
-
-      } catch (err) {
-        logger.error(`Processing failed: ${err.message}`);
-        await ctx.replyWithMarkdown(
-          `❌ *Processing Error*\n\n` +
-          `${err.message}\n\n` +
-          `Please try again with /analyze or contact support if the issue persists.`
-        );
-      } finally {
-        // Cleanup
-        resetSession(chatId);
-        cleanupFiles(filesToCleanup);
-      }
-
+      // Trigger processing
+      await triggerProcessing(ctx, chatId, session);
       return;
     }
 
@@ -298,6 +291,60 @@ function registerHandlers(bot) {
   });
 
   logger.info('All bot handlers registered');
+}
+
+/**
+ * Shared processing pipeline trigger.
+ * Extracted to avoid duplication between text JD and file JD handlers.
+ */
+async function triggerProcessing(ctx, chatId, session) {
+  const filesToCleanup = [];
+
+  try {
+    const result = await processResume(
+      session.resumePath,
+      session.resumeExt,
+      session.jdText
+    );
+
+    filesToCleanup.push(result.pdfPath, result.docxPath);
+
+    // Send the analysis report
+    await ctx.replyWithMarkdown(result.formattedMessage);
+
+    // Send the PDF file
+    if (result.pdfPath && fs.existsSync(result.pdfPath)) {
+      await ctx.replyWithDocument(
+        { source: result.pdfPath, filename: 'improved_resume.pdf' },
+        { caption: '📄 Your optimized resume (PDF)' }
+      );
+    }
+
+    // Send the DOCX file
+    if (result.docxPath && fs.existsSync(result.docxPath)) {
+      await ctx.replyWithDocument(
+        { source: result.docxPath, filename: 'improved_resume.docx' },
+        { caption: '📝 Your optimized resume (DOCX)' }
+      );
+    }
+
+    await ctx.replyWithMarkdown(
+      `✅ *Analysis complete!*\n\n` +
+      `Use /analyze to analyze with a different job description.\n` +
+      `Use /start to restart the bot.`
+    );
+
+  } catch (err) {
+    logger.error(`Processing failed: ${err.message}`);
+    await ctx.replyWithMarkdown(
+      `❌ *Processing Error*\n\n` +
+      `${err.message}\n\n` +
+      `Please try again with /analyze or contact support if the issue persists.`
+    );
+  } finally {
+    resetSession(chatId);
+    cleanupFiles(filesToCleanup);
+  }
 }
 
 module.exports = { registerHandlers };
